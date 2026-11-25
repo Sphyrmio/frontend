@@ -10,7 +10,7 @@ import { skusApi } from '@/pages/skus/skus.api'
 import type { SkuVO } from '@/pages/skus/skus.model'
 import { warehousesApi } from '@/pages/warehouses/warehouses.api'
 import type { LocationVO } from '@/pages/warehouses/warehouses.model'
-import { recordCall, type CallResult } from '@/core/ui/callResult'
+import { recordCall, callTime, type CallResult } from '@/core/ui/callResult'
 import { loadOrders, upsertOrder, clearOrders } from '@/core/ui/orderHistory'
 
 const STORE_KEY = 'wms.inboundOrders'
@@ -71,6 +71,29 @@ export function inboundPageComponent() {
       const res = await inboundApi.complete(id)
       this.calls = recordCall(this.calls, `POST /inbound-orders/${id}/complete`, res)
       if (res.ok) this.keep(res.data)
+      this.busy = false
+    },
+
+    /** 作业一：把同一张单的两个「完成入库」同时发出去，两个结果都记到「接口返回」 */
+    async completeTogether() {
+      if (!this.current) return
+      this.busy = true
+      const id = this.current.id
+      const sentAt = callTime()
+      const results = await Promise.all([
+        inboundApi.complete(id).then((res) => ({ res, at: callTime() })),
+        inboundApi.complete(id).then((res) => ({ res, at: callTime() })),
+      ])
+      results.sort((a, b) => a.at.localeCompare(b.at))
+      for (const { res, at } of results) {
+        this.calls = recordCall(
+          this.calls,
+          `POST /inbound-orders/${id}/complete（${sentAt} 同时发出）`,
+          res,
+          at,
+        )
+        if (res.ok) this.keep(res.data)
+      }
       this.busy = false
     },
 
